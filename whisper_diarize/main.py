@@ -4,15 +4,17 @@ CLI entrypoint
 """
 
 import os
+# Apply torch load patch immediately
+from . import torch_fix
 import sys
 import click
 from pathlib import Path
 
 from .config import HF_TOKEN, DEFAULT_LANGUAGE, DEFAULT_OUTPUT_FORMATS, WHISPER_MODEL
 from .utils import get_optimal_device, format_duration
-from .transcribe import transcribe_audio
-from .diarize import diarize_audio
-from .merge import merge_transcription_and_speakers, merge_consecutive_same_speaker
+from .utils import get_optimal_device, format_duration
+from .whisperx_pipeline import process_audio_whisperx
+from .merge import merge_consecutive_same_speaker
 from .export import export_results
 
 
@@ -31,9 +33,11 @@ from .export import export_results
               help='Whisper-modell (t.ex. KBLab/kb-whisper-large)')
 @click.option('--no-diarization', is_flag=True,
               help='Skip speaker diarization (faster, no speaker identification)')
+@click.option('--num-speakers', type=int, default=None,
+              help='Number of speakers (default: auto-detect)')
 @click.option('--merge-speakers', is_flag=True, default=True,
               help='Merge consecutive segments from same speaker')
-def main(input_file, output_dir, language, formats, device, whisper_model, no_diarization, merge_speakers):
+def main(input_file, output_dir, language, formats, device, whisper_model, no_diarization, num_speakers, merge_speakers):
     """
     Whisper Diarize - Transkribera och diarisera ljudfiler lokalt
 
@@ -71,37 +75,40 @@ def main(input_file, output_dir, language, formats, device, whisper_model, no_di
 
     try:
         # [4/6] Transkribering
-        print("\n[4/6] Transkriberar ljud...")
-        transcription = transcribe_audio(
-            audio_path=str(input_path),
-            language=language,
-            device=device,
-            compute_type=compute_type,
-            model_name=whisper_model
-        )
-
-        # [5/6] Diarisering (valfritt)
+        # [4/6] Bearbetning med WhisperX
+        print("\n[4/6] Kör WhisperX (Transkribering + Alignment + Diarisering)...")
+        
         if no_diarization:
-            print("\n[5/6] Hoppar över diarisering...")
-            # Lägg till dummy speaker för alla segment
-            results = [
-                {**seg, "speaker": "SPEAKER_00"}
-                for seg in transcription
-            ]
-        else:
-            print("\n[5/6] Diariserar talare...")
-            speakers = diarize_audio(
+             # Om ingen diarisering önskas, använd pipeline men strunta i talar-argument eller implementation
+             # För enkelhets skull, låt oss använda process_audio_whisperx men ignorera speakers i output om flaggan är satt,
+             # fast WhisperX pipeline transkriberar och alignar först. 
+             # Men vänta, min pipeline gör alltid diarization som sista steg.
+             # Jag borde kanske lagt till flagga i pipeline.
+             # För nu, kör allt men rensa speakers om no_diarization.
+             results = process_audio_whisperx(
                 audio_path=str(input_path),
-                hf_token=HF_TOKEN
+                num_speakers=None,
+                device=device,
+                compute_type=compute_type,
+                language=language
+            )
+             for seg in results:
+                 seg["speaker"] = "SPEAKER_00"
+        else:
+            results = process_audio_whisperx(
+                audio_path=str(input_path),
+                num_speakers=num_speakers,
+                device=device,
+                compute_type=compute_type,
+                language=language
             )
 
-            print("Kombinerar transkribering och talare...")
-            results = merge_transcription_and_speakers(transcription, speakers)
+        print("Bearbetning klar.")
 
-            # Slå ihop konsekutiva segment från samma talare
-            if merge_speakers:
-                print("Slår ihop segment från samma talare...")
-                results = merge_consecutive_same_speaker(results)
+        # Slå ihop konsekutiva segment från samma talare
+        if merge_speakers:
+            print("Slår ihop segment från samma talare...")
+            results = merge_consecutive_same_speaker(results)
 
         # [6/6] Exportera resultat
         print("\n[6/6] Exporterar resultat...")

@@ -6,3 +6,4 @@ tqdm>=4.65.0
 pydub>=0.25.1
 python-dotenv>=1.0.0
 # OBS: Inkludera INTE torch eller torchaudio - använd befintlig installation
+git+https://github.com/m-bain/whisperx.git

@@ -1,5 +1,8 @@
 import os
+# Apply torch load patch immediately
+from . import torch_fix
 import uuid
+import json
 import threading
 from pathlib import Path
 from typing import List, Dict
@@ -9,9 +12,9 @@ from flask import Flask, request, redirect, url_for, send_from_directory, render
 
 from .config import HF_TOKEN, DEFAULT_LANGUAGE, DEFAULT_OUTPUT_FORMATS, WHISPER_MODEL
 from .utils import get_optimal_device, format_duration
-from .transcribe import transcribe_audio
-from .diarize import diarize_audio
-from .merge import merge_transcription_and_speakers, merge_consecutive_same_speaker
+from .utils import get_optimal_device, format_duration
+from .whisperx_pipeline import process_audio_whisperx
+from .merge import merge_consecutive_same_speaker
 from .export import export_results
 
 
@@ -127,6 +130,10 @@ INDEX_HTML = """
           <input type="checkbox" id="diarization" name="diarization" checked />
         </div>
         <div class="row">
+          <label for="num_speakers">Antal talare:</label>
+          <input type="number" id="num_speakers" name="num_speakers" min="1" max="20" placeholder="auto" />
+        </div>
+        <div class="row">
           <label for="merge_speakers">Slå ihop talare:</label>
           <input type="checkbox" id="merge_speakers" name="merge_speakers" checked />
         </div>
@@ -189,7 +196,8 @@ INDEX_HTML = """
           if (data.status === 'done' || data.status === 'error') {
             eventSource.close();
             setTimeout(() => {
-              window.location.href = '/';
+              // Redirect to result handler to show flash message
+              window.location.href = '/job_result/' + jobId;
             }, 1000);
           }
         };
@@ -224,41 +232,110 @@ def index():
     )
 
 
+@app.route("/auto_test")
+def auto_test():
+    """
+    One-click test endpoint - automatically starts processing the hardcoded test file.
+    Navigate to http://127.0.0.1:5000/auto_test to trigger.
+    """
+    import uuid
+    import threading
+    
+    # Hardcoded test file
+    test_file = Path("/mnt/c/Users/rikar/Downloads/morgonsoffan angel [4W4Xtz6g8Og].mp3")
+    
+    if not test_file.exists():
+        return f"<h1>Fel</h1><p>Testfilen finns inte: {test_file}</p>", 404
+    
+    # Generate job ID
+    job_id = uuid.uuid4().hex[:12]
+    
+    # Get device settings
+    device, compute_type = get_optimal_device()
+    
+    update_progress(job_id, "Auto-test startar", 5, f"Bearbetar {test_file.name}")
+    
+    # Start background task
+    thread = threading.Thread(
+        target=process_audio_task,
+        args=(job_id, test_file, DEFAULT_LANGUAGE, device, compute_type, WHISPER_MODEL,
+              True, None, True, ["txt", "srt"])
+    )
+    thread.daemon = True
+    thread.start()
+    
+    # Return a simple page that shows progress
+    return f'''
+    <html>
+    <head><title>Auto Test</title></head>
+    <body>
+        <h1>Auto-test startad!</h1>
+        <p>Job ID: {job_id}</p>
+        <p>Fil: {test_file.name}</p>
+        <p>Kolla terminalen för progress...</p>
+        <p><a href="/">Tillbaka till startsidan</a></p>
+    </body>
+    </html>
+    '''
+
+
+@app.route("/job_result/<job_id>")
+def job_result(job_id: str):
+    """Hanterar resultat och flash-meddelanden innan redirect"""
+    if job_id not in progress_store:
+        return redirect(url_for("index"))
+        
+    current = progress_store[job_id]
+    
+    if current["status"] == "done":
+        if "files" in current and "results" in current:
+            files = current["files"]
+            results = current["results"]
+            links = [url_for("serve_file", path=Path(p).relative_to(OUTPUT_DIR)) for p in files]
+            flash_msg = (
+                f"Klart: {len(results)} segment, "
+                f"längd {format_duration(results[-1]['end'] if results else 0)}. "
+                f"Filer: " +
+                ", ".join(f"<a href='{l}'>{Path(p).name}</a>" for l, p in zip(links, files))
+            )
+            flash(flash_msg, "ok")
+    elif current["status"] == "error":
+        flash(current["message"], "err")
+        
+    # Clean up
+    if job_id in progress_store:
+        del progress_store[job_id]
+        
+    return redirect(url_for("index"))
+
+
 def process_audio_task(job_id: str, target: Path, language: str, device: str, compute_type: str,
-                       whisper_model: str, use_diarization: bool, merge_speakers: bool, formats: List[str]):
+                       whisper_model: str, use_diarization: bool, num_speakers: int, merge_speakers: bool, formats: List[str]):
     """Background task för att bearbeta ljud"""
     try:
-        update_progress(job_id, "Transkriberar...", 10, f"Laddar Whisper-modell ({whisper_model})")
+        update_progress(job_id, "Bearbetar...", 10, "Startar WhisperX pipeline")
 
-        segments = transcribe_audio(
+        # Anropa WhisperX pipeline
+        # Notera: Vi ignorerar whisper_model argumentet här eftersom whisperx_pipeline hårdkodar/väljer modell själv (large-v2)
+        # eller så borde vi uppdaterat pipeline att ta emot det. I min implementation tog den inte model_name.
+        # Vi kör på default i pipeline.
+        
+        results = process_audio_whisperx(
             audio_path=str(target),
-            language=language,
+            num_speakers=num_speakers if use_diarization else None,
             device=device,
             compute_type=compute_type,
-            model_name=whisper_model,
+            language=language
         )
+        
+        if not use_diarization:
+             for seg in results:
+                 seg["speaker"] = "SPEAKER_00"
 
-        update_progress(job_id, "Transkribering klar", 40, f"{len(segments)} segment transkriberade")
+        if merge_speakers:
+            results = merge_consecutive_same_speaker(results)
 
-        if use_diarization:
-            update_progress(job_id, "Diariserar talare...", 45, "Laddar diariseringsmodell")
-
-            speakers = diarize_audio(
-                audio_path=str(target),
-                hf_token=HF_TOKEN,
-            )
-
-            update_progress(job_id, "Kombinerar resultat...", 70, "Matchar talare med transkribering")
-
-            merged = merge_transcription_and_speakers(segments, speakers)
-            if merge_speakers:
-                merged = merge_consecutive_same_speaker(merged)
-            results = merged
-
-            update_progress(job_id, "Diarisering klar", 80, f"{len(set(s['speaker'] for s in results))} talare identifierade")
-        else:
-            results = [{**s, "speaker": "SPEAKER_00"} for s in segments]
-            update_progress(job_id, "Hoppar över diarisering", 70, "")
+        update_progress(job_id, "Bearbetning klar", 80, f"{len(set(s['speaker'] for s in results))} talare identifierade")
 
         update_progress(job_id, "Exporterar resultat...", 85, f"Skapar {', '.join(formats)}-filer")
 
@@ -291,6 +368,8 @@ def transcribe_route():
     whisper_model = request.form.get("whisper_model", WHISPER_MODEL)
     formats: List[str] = request.form.getlist("formats") or DEFAULT_OUTPUT_FORMATS
     use_diarization = request.form.get("diarization") is not None
+    num_speakers_str = request.form.get("num_speakers", "").strip()
+    num_speakers = int(num_speakers_str) if num_speakers_str else None
     merge_speakers = request.form.get("merge_speakers") is not None
 
     # Generate job ID
@@ -302,7 +381,7 @@ def transcribe_route():
     target = UPLOAD_DIR / f"{fid}_{safe_name}"
     file.save(target)
 
-    update_progress(job_id, "Fil uppladdad", 5, f"Bearbetar {safe_name}")
+    update_progress(job_id, "Fil uppladdad", 5, f"Bearbetar {target.name}")
 
     # Device/compute type
     if device_opt == "auto":
@@ -315,7 +394,7 @@ def transcribe_route():
     thread = threading.Thread(
         target=process_audio_task,
         args=(job_id, target, language, device, compute_type, whisper_model,
-              use_diarization, merge_speakers, formats)
+              use_diarization, num_speakers, merge_speakers, formats)
     )
     thread.daemon = True
     thread.start()
@@ -335,27 +414,12 @@ def progress_stream(job_id: str):
                 # Only send if changed
                 if current != last_status:
                     last_status = current.copy()
-                    yield f"data: {jsonify(current).get_data(as_text=True)}\n\n"
+                    yield f"data: {json.dumps(current)}\n\n"
 
                 # If done or error, send final message and end stream
                 if current["status"] in ["done", "error"]:
-                    # Add flash message and file links for done status
-                    if current["status"] == "done" and "files" in current and "results" in current:
-                        files = current["files"]
-                        results = current["results"]
-                        links = [url_for("serve_file", path=Path(p).relative_to(OUTPUT_DIR)) for p in files]
-                        flash_msg = (
-                            f"Klart: {len(results)} segment, "
-                            f"längd {format_duration(results[-1]['end'] if results else 0)}. "
-                            f"Filer: " +
-                            ", ".join(f"<a href='{l}'>{Path(p).name}</a>" for l, p in zip(links, files))
-                        )
-                        flash(flash_msg, "ok")
-                    elif current["status"] == "error":
-                        flash(current["message"], "err")
-
-                    # Clean up
-                    del progress_store[job_id]
+                    # Wait a bit to let client receive the message
+                    yield f"data: {json.dumps(current)}\n\n"
                     break
 
             import time

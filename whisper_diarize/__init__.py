@@ -2,6 +2,9 @@
 Whisper Diarize - Lokalt transkribering och talardiarisering för svenska ljudfiler
 """
 
+# Apply torch load patch immediately before any other imports!
+from . import torch_fix
+
 __version__ = "1.0.0"
 __author__ = "Whisper Diarize"
 __description__ = "Lokalt transkribering och talardiarisering med Whisper och Pyannote"

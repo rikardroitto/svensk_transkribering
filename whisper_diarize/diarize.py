@@ -10,13 +10,14 @@ from pyannote.audio import Pipeline
 from .config import DIARIZATION_MODEL
 
 
-def diarize_audio(audio_path: str, hf_token: str) -> List[Dict]:
+def diarize_audio(audio_path: str, hf_token: str, num_speakers: int = None) -> List[Dict]:
     """
     Diarisera ljudfil för att identifiera olika talare.
 
     Args:
         audio_path: Sökväg till ljudfilen
         hf_token: Hugging Face token för att ladda modellen
+        num_speakers: Antal talare (None för automatisk detektering)
 
     Returns:
         List[Dict]: Lista med talarsegment: [{"start": float, "end": float, "speaker": str}, ...]
@@ -72,7 +73,8 @@ def diarize_audio(audio_path: str, hf_token: str) -> List[Dict]:
             )
         raise Exception(f"Kunde inte ladda diariseringsmodellen: {e}")
 
-    print(f"Diariserar: {os.path.basename(audio_path)}")
+    speakers_info = f"{num_speakers} talare" if num_speakers else "auto"
+    print(f"Diariserar: {os.path.basename(audio_path)} ({speakers_info})")
 
     try:
         # Ladda ljudfil med soundfile (workaround för torchcodec-problem)
@@ -94,7 +96,11 @@ def diarize_audio(audio_path: str, hf_token: str) -> List[Dict]:
         }
 
         # Kör diarisering med preloaded audio
-        diarization = pipeline(audio_dict)
+        # Om num_speakers anges, använd det för bättre resultat
+        if num_speakers is not None and num_speakers > 0:
+            diarization = pipeline(audio_dict, num_speakers=num_speakers)
+        else:
+            diarization = pipeline(audio_dict)
 
         # Konvertera till lista av dictionaries
         segments = []

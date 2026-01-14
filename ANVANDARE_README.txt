@@ -10,32 +10,28 @@ FÖRUTSÄTTNINGAR
 
 INSTALLATION
 ------------
-1. Skapa och aktivera virtuell miljö:
-
-   # Linux/Mac:
-   bash scripts/start.sh cpu    # För CPU
-   bash scripts/start.sh gpu    # För GPU med CUDA
-
-   # Windows PowerShell:
-   .\scripts\start.ps1 cpu
-   .\scripts\start.ps1 gpu
-
-2. Skapa .env fil med din Hugging Face-token:
+1. Skapa .env fil med din Hugging Face-token:
 
    cp whisper_diarize/.env.example .env
 
    Redigera .env och sätt:
    HF_TOKEN=din_token_här
 
-STARTA PROGRAMMET
------------------
-Webbgränssnitt (rekommenderat):
+2. Starta programmet (skapar automatiskt virtuell miljö, installerar beroenden och startar):
 
-   python -m whisper_diarize.webapp
+   # Linux/Mac:
+   bash scripts/start.sh gpu    # För GPU med CUDA (rekommenderat)
+   bash scripts/start.sh cpu    # För CPU (långsammare)
 
-   Öppna sedan http://localhost:5000 i webbläsaren.
+   # Windows PowerShell:
+   .\scripts\start.ps1 gpu
+   .\scripts\start.ps1 cpu
 
-Kommandorad:
+3. Öppna http://localhost:5000 i webbläsaren.
+
+KOMMANDORAD (alternativ)
+------------------------
+Om du vill köra via kommandorad istället för webben:
 
    python -m whisper_diarize.main -i ljudfil.mp3 -o output
 

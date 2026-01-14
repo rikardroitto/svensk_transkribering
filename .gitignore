@@ -16,6 +16,8 @@ ENV/
 
 # Output directories
 output/
+output_test/
+output_test_full/
 results/
 
 # Models cache

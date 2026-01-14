@@ -2,13 +2,16 @@
 Hjälpfunktioner för device detection och progress reporting
 """
 
-import torch
 from typing import Tuple
+import torch
 
 
-def get_optimal_device() -> Tuple[str, str]:
+def get_optimal_device(verbose: bool = True) -> Tuple[str, str]:
     """
     Detektera bästa device och compute type för systemet.
+
+    Args:
+        verbose: Om True, skriv ut detaljerad information
 
     Returns:
         Tuple[str, str]: (device, compute_type)
@@ -16,7 +19,16 @@ def get_optimal_device() -> Tuple[str, str]:
             - compute_type: "float16", "float32", eller "int8"
     """
     if not torch.cuda.is_available():
-        print("ℹ️  CUDA inte tillgänglig, använder CPU")
+        if verbose:
+            print("=" * 60)
+            print("⚠️  CUDA inte tillgänglig")
+            print("    Använder CPU-läge (långsammare)")
+            print()
+            print("    För GPU-acceleration:")
+            print("    1. Kontrollera att du har en NVIDIA GPU")
+            print("    2. Installera/uppdatera NVIDIA drivers")
+            print("    3. Se till att PyTorch är installerat med CUDA-stöd")
+            print("=" * 60)
         return "cpu", "int8"
 
     try:
@@ -25,13 +37,33 @@ def get_optimal_device() -> Tuple[str, str]:
         del test_tensor
         torch.cuda.empty_cache()
 
-        # Använd float32 för kompatibilitet med sm_120 (RTX 5090)
-        print("✅ CUDA tillgänglig, använder GPU")
-        return "cuda", "float32"
+        if verbose:
+            gpu_name = torch.cuda.get_device_name(0)
+            cuda_version = torch.version.cuda
+            gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
+
+            print("=" * 60)
+            print(f"✓ GPU detekterad och funktionell")
+            print(f"   Namn: {gpu_name}")
+            print(f"   CUDA Version: {cuda_version}")
+            print(f"   GPU Minne: {gpu_memory:.1f} GB")
+            print(f"   Använder GPU-acceleration")
+            print("=" * 60)
+
+        return "cuda", "float16"
 
     except Exception as e:
-        print(f"⚠️  CUDA tillgänglig men instabil: {e}")
-        print("Faller tillbaka på CPU")
+        if verbose:
+            print("=" * 60)
+            print(f"⚠️  CUDA tillgänglig men ej funktionell")
+            print(f"    Fel: {str(e)[:100]}")
+            print(f"    Faller tillbaka på CPU-läge")
+            print()
+            print("    Möjliga orsaker:")
+            print("    - Inkompatibel GPU driver")
+            print("    - CUDA libraries saknas eller är skadade")
+            print("    - GPU används av en annan process")
+            print("=" * 60)
         return "cpu", "int8"
 
 

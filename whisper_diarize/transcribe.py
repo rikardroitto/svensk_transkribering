@@ -13,7 +13,8 @@ def transcribe_audio(
     audio_path: str,
     language: str,
     device: str,
-    compute_type: str
+    compute_type: str,
+    model_name: str | None = None,
 ) -> List[Dict]:
     """
     Transkribera ljudfil med Whisper.
@@ -23,6 +24,7 @@ def transcribe_audio(
         language: Språkkod (t.ex. "sv" för svenska)
         device: "cuda" eller "cpu"
         compute_type: "float16", "float32", eller "int8"
+        model_name: Valfri modellidentifierare; default från config
 
     Returns:
         List[Dict]: Lista med segments: [{"start": float, "end": float, "text": str}, ...]
@@ -35,19 +37,20 @@ def transcribe_audio(
     if not os.path.exists(audio_path):
         raise FileNotFoundError(f"Ljudfilen hittades inte: {audio_path}")
 
-    print(f"📝 Laddar Whisper-modell: {WHISPER_MODEL}")
+    selected_model = model_name or WHISPER_MODEL
+    print(f"Laddar Whisper-modell: {selected_model}")
 
     try:
         # Ladda modellen
         model = WhisperModel(
-            WHISPER_MODEL,
+            selected_model,
             device=device,
             compute_type=compute_type
         )
     except Exception as e:
         raise Exception(f"Kunde inte ladda Whisper-modellen: {e}")
 
-    print(f"🎙️  Transkriberar: {os.path.basename(audio_path)}")
+    print(f"Transkriberar: {os.path.basename(audio_path)}")
 
     try:
         # Transkribera
@@ -79,7 +82,7 @@ def transcribe_audio(
                 pbar.update(progress)
                 last_end = segment.end
 
-        print(f"✅ Transkribering klar: {len(segments)} segment")
+        print(f"Transkribering klar: {len(segments)} segment")
         return segments
 
     except Exception as e:
